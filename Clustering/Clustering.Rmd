@@ -1,0 +1,284 @@
+---
+title: "Modern Data Mining: Clustering"
+author:
+- Bopei Nie
+date: '2/26/2023'
+output:
+  html_document:
+    code_folding: hide
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+  word_document:
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, fig.width=8, fig.height=4)
+options(scipen = 0, digits = 3)  # controls base R output
+# check if you have ISLR package, if not, install it
+if(!require('pacman')) {install.packages('pacman')}
+pacman::p_load(ISLR, readxl, magrittr, dplyr, ggplot2) # add the packages needed
+```
+
+
+\pagebreak
+
+# Overview
+
+Multiple regression is one of the most popular methods used in statistics as well as in machine learning. We use linear models as a working model for its simplicity and interpretability. It is important that we use domain knowledge as much as we could to determine the form of the response as well as the function format for the factors. Then, when we have many possible features to be included in the working model it is inevitable that we need to choose a best possible model with a sensible criterion. `Cp`, `BIC` and regularizations such as LASSO are introduced. Be aware that if a model selection is done formally or informally, the inferences obtained with the final `lm()` fit may not be valid. Some adjustment will be needed. This last step is beyond the scope of this class. Check the current research line that Linda and collaborators are working on. 
+
+This homework consists of two parts: the first one is an exercise (you will feel it being a toy example after the covid case study) to get familiar with model selection skills such as, `Cp` and `BIC`. The main job is a rather involved case study about devastating covid19 pandemic.  Please read through the case study first.  This project is for sure a great one listed in your CV. 
+
+For covid case study, the major time and effort would be needed in EDA portion.
+
+## Objectives
+
+- Model building process
+
+- Methods
+    - Model selection
+        + All subsets
+        + Forward/Backward
+    - Regularization
+        + LASSO (L1 penalty)
+        + Ridge (L2 penalty)
+        + Elastic net
+- Understand the criteria 
+    - `Cp`
+    - Testing Errors
+    - `BIC` 
+    - `K fold Cross Validation`
+    - `LASSO` 
+- Packages
+    - `lm()`, `Anova`
+    - `regsubsets()`
+    - `glmnet()` & `cv.glmnet()`
+
+# Review materials
+
+- Study lecture: Model selection
+- Study lecture: Regularization
+- Study lecture: Multiple regression
+
+Review the code and concepts covered during lectures: multiple regression, model selection and penalized regression through elastic net. 
+
+
+# Case study 1:  `ISLR::Auto` data
+
+This will be the last part of the Auto data from ISLR. The original data contains 408 observations about cars. It has some similarity as the Cars data that we use in our lectures. To get the data, first install the package `ISLR`. The data set `Auto` should be loaded automatically. We use this case to go through methods learned so far. 
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+head(Auto)
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+Auto <- Auto[, -ncol(Auto)]
+```
+
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+colnames(Auto)
+```
+
+
+
+Final modelling question: We want to explore the effects of each feature as best as possible. 
+
+1) Preparing variables: 
+
+a) You may explore the possibility of variable transformations. We normally do not suggest to transform $x$ for the purpose of interpretation. You may consider to transform $y$ to either correct the violation of the linear model assumptions or if you feel a transformation of $y$ makes more sense from some theory. In this case we suggest you to look into `GPM=1/MPG`. Compare residual plots of MPG or GPM as responses and see which one might yield a more satisfactory patterns. 
+
+In addition, can you provide some background knowledge to support the notion: it makes more sense to model `GPM`?  
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+origin <- as.factor(Auto$origin)
+```
+
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+Auto$GPM <- 1/Auto$mpg
+
+model_mpg <- lm(mpg ~ cylinders + displacement + horsepower + weight + acceleration + year + origin, data = Auto)
+summary(model_mpg)
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+model_gpm <- lm(GPM ~ cylinders + displacement + horsepower + weight + acceleration + year + origin, data = Auto)
+summary(model_gpm)
+```
+
+GPM has a larger R-squared than MPG does, which suggests it is more accurately captured. 
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+par(mfrow=c(1,2))
+plot(model_mpg, 1)
+plot(model_gpm, 1)
+```
+
+We see a better fit when using GPM The MPG Residuals vs Fitted plot has a valley as the red line, while the GPM Residuals vs Fitted plot shows that the residuals are scattered around 0. The red line is almost horizontal. This means that there is barely any relationship between the residuals and the predicted values, which is what we want to achieve. 
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+par(mfrow=c(1,2))
+plot(model_mpg, 2)
+plot(model_gpm, 2)
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+shapiro.test(residuals(model_mpg))
+shapiro.test(residuals(model_gpm))
+```
+
+Both models show significant p-values for the normality test, so we reject the null hypothesis and conclude residuals for both models are not normally distributed. 
+
+Since GPM has better Residuals vs Fitted plot, we prefer using gpm. GPM stands for gallons per mile. It can measure gas consumption, which is an important feature of cars. Hence, it makes sense to model GPM. 
+
+b) You may also explore by adding interactions and higher order terms. The model(s) should be as *parsimonious* (simple) as possible, unless the gain in accuracy is significant from your point of view. 
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+model_gpm1 <- lm(GPM ~ cylinders + displacement + horsepower + weight + acceleration + year + origin
+                 +horsepower*acceleration+weight*year, data = Auto)
+summary(model_gpm1)
+```
+
+I experienced with interactions and higher order terms. In the end, I decided to add two interaction terms: horsepower and acceleration, and weight and year, which increases r-squared by 0.015. 
+
+c) Use Mallow's $C_p$ or BIC to select the model.
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+Auto <- Auto[, -1] #remove the mpg column
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+library(leaps)
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+regsubsets_fit <- regsubsets(GPM ~ ., data = Auto, nvmax = 20)
+summary(regsubsets_fit)
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+summary(regsubsets_fit)$cp
+```
+
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+plot(summary(regsubsets_fit)$cp, xlab="Number of predictors",  
+     ylab="Cp", col="red", pch=16, cex =3)
+```
+
+It shows that a model with 7 variables has the smaller prediction error.
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+par(mfrow=c(1, 3))  # see diff criteria
+  plot(summary(regsubsets_fit)$cp, xlab="Number of predictors", 
+     ylab="Cp", col="red",  pch=16, cex=2)
+  plot(summary(regsubsets_fit)$rsq, xlab="R^2", pch=15,  col= "blue", cex=2)
+  plot(summary(regsubsets_fit)$rss, xlab="RSS", pch = 14, col="green", cex=2)
+par(mfrow=c(1,1))
+```
+
+The model with 7 variables has the lowest Cp and RSS, but has the highest R^2 score. 
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+opt.size <- which.min(summary(regsubsets_fit)$cp) 
+opt.size
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+coef(regsubsets_fit,opt.size)
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+fit.exh.var <- summary(regsubsets_fit)$which # logic indicators which variables are in
+fit.exh.var[opt.size,] 
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+colnames(fit.exh.var)[fit.exh.var[opt.size,]] 
+```
+
+2) Describe the final model and its accuracy. Include diagnostic plots with particular focus on the model residuals.
+  * Summarize the effects found.
+
+"cylinders", "displacement", "horsepower", "weight", "acceleration", "year", and "origin" are important features. We include them in our final model. 
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+fit.final <- lm(GPM ~ cylinders + displacement + horsepower + weight + acceleration + year + origin, Auto )   
+summary(fit.final) 
+```
+The final model has a Residual standard error of 0.00569, a Multiple R-squared of 0.885 and a significant p-value.
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+par(mfrow=c(1,2))
+plot(fit.final, 1, cex =3)
+plot(fit.final, 2) 
+```
+
+The residuals are nicely distributed along a horizontal line around 0. Just like we analyzed before, the residuals are not normally distributed.
+
+  * Predict the `mpg` of a car that is: built in 1983, in the US, red, 180 inches long, 8 cylinders, 350 displacement, 260 as horsepower, and weighs 4,000 pounds. Give a 95% CI.
+  
+```{r, echo = TRUE, warning = FALSE, results="hold"} 
+colMeans(Auto)
+```
+
+Since we do not have entry for acceleration, we add in the mean of acceleration from training data. 
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+newcar <- Auto[1, ] # Create a new row with same structure as in Auto
+newcar[1] <- 8
+newcar[2] <- 350
+newcar[3] <- 260
+newcar[4] <- 4000
+newcar[5] <- 1.55e+01
+newcar[6] <- 83
+newcar[7]<-1
+newcar[8]<-"NA"
+newcar
+```
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+predict(fit.final, newcar, interval = "predict", se.fit = TRUE) 
+```
+The predicted GPM is 0.0647 in interval [0.0525, 0.0768] with 95% Confidence level.
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+1/(predict(fit.final, newcar, interval = "predict", se.fit = TRUE)$fit)
+```
+
+If we inverse the number, we get the predicted MPG is 15.5 in interval [13, 19] with 95% Confidence level.
+
+We also want to try to fit new car into model_gpm1, which has the seven variables and two interaction terms and has a higher R-square. 
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+predict(model_gpm1, newcar, interval = "predict", se.fit = TRUE) 
+```
+The predicted GPM is 0.0748 in interval [0.0621, 0.0875] with 95% Confidence level.
+
+```{r, echo = TRUE, warning = FALSE, results="hold"}
+1/(predict(model_gpm1, newcar, interval = "predict", se.fit = TRUE)$fit)
+```
+
+If we inverse the number, we get the predicted MPG is 13.4 in interval [11.4, 16.1] with 95% Confidence level.
+
+  * Any suggestions as to how to improve the quality of the study?
+- Examine more relevant features. 
+- Examine more observations. Now we only have less than 400 observations. 
+- Explore other model selection methods. 
+
+# Case study 2: COVID19
+
+See a seperate file covid_case_study.Rmd for details. 
+
