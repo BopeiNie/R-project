@@ -1,0 +1,280 @@
+---
+title: "Credit Risk via Lending Club"
+author: 
+- Bopei Nie
+date: '03/24/2023'
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    toc_depth: '4'
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 7, fig.height = 4)
+if(!require("pacman")) install.packages("pacman")
+pacman::p_load(dplyr, ggplot2, glmnet, car, data.table)   #add your packages here
+```
+
+# Lending Club Analysis
+
+## Background
+
+Lending Club is the world's largest peer-to-peer online lending platform that connects borrowers and investors. By eliminating traditional financial institutions, Lending Club provides higher returns for individual investors and lower interest rates for borrowers. As a result, Lending Club has grown exponentially in recent years and has become an attractive alternative for investors who are seeking higher returns.
+
+However, investing in loans through Lending Club is not without risks. Borrowers may default on their loans, causing investors to lose their money. Therefore, it is important for Lending Club and its investors to identify the types of loans that are less likely to default and to build a portfolio that maximizes returns while minimizing risks.
+
+In this report, we will apply machine learning techniques to identify the important risk factors that contribute to loan default and to build a classifier that can accurately predict the likelihood of default. Specifically, we will focus on the period between 2007-2011, during which we have around 39,000 observations and 38 attributes for each of these loans. These attributes include loan amount, home ownership status, interest rate on the loan, loan status, and grade of the loan, among others.
+
+By addressing these questions, we aim to provide a classification rule that will help investors to identify the types of loans that should be included in their portfolio, while minimizing the risk of losing money due to loan defaults.
+
+## Data Summary 
+
+The cleaned data set has around 39k observations and 38 attributes. Attributes can be segmented into pre-funded loan data, borrower data, borrower credit data and post-loan data. The target variable is `loan_status` in post-loan data including 5468 `Charged Off` and 33503 `Fully Paid`. According to the definition, `Charged Off` means defaulted and there is no longer a reasonable expectation of further payments. Thus the loan status are separated into 5468 defaulted (`Charged Off`) and 33503 non-defaulted (`Fully Paid`). However, it is unbalanced that non-defaulted accounts for a large percentage. Among the four categories, post-loan data will not be used to classify `loan_status`. Thus, we look into the other three categories.
+
+From Pre-funded loan data, we have quantitative variables including loan_amnt, int_rate, installment and factor variables including grade, sub_grade, purpose, term. We will not use sub_grade in our case. There are in total 7 grades distribution shown as following that most grade is B and have a decreasing trend on the grades. There are two terms, including 28301 `36_months` and 10670 `60_months`. We will turn factor variables (grade and term) into dummy variables for future modeling. There are 14 purposes among which debt_consolidation accounts most. Other detailed distribution will be shown in the Appendix. 
+
+From Borrower basic information, we have quantitative variables annual_inc and qualitative variables including emp_title, emp_length, home_ownership, zip_code, addr_state, verification_status. Among those qualitative variables, home_ownership contains 17427 MORTGAGE, 18456 RENT, 2992 OWN, and 96 OTHER. Verification_status contains 16165 Not Verified, 9992 Source Verified, and 12814 Verified.
+
+From Borrower credit data, we have quantitative variables including dti, delinq_2yrs, inq_last_6mths, open_acc, pub_rec, revol_bal, revol_util, total_acc, pub_rec_bankruptcies and date variables earliest_cr_line.
+  
+After having a clear understanding of what data looks like, we replace `Charged Off` with 1 and `Fully Paid` with 0 for future logistic regression and classification.
+
+Additionally, we split them into 80% training dataset to train the model and 20% testing dataset to test the result.
+
+```{r echo=FALSE, results=FALSE}
+loan <- fread("Case_LendingClub/loanStats_07_11_clean.csv", stringsAsFactors = T)
+```
+
+```{r echo=FALSE, results=FALSE}
+table(loan$loan_status)
+```
+
+```{r echo=FALSE, results=FALSE}
+loan$loan_status <- sub("Charged Off", 1, loan$loan_status)
+loan$loan_status <- sub("Fully Paid", 0, loan$loan_status)
+loan$loan_status <- as.numeric(loan$loan_status)
+```
+
+```{r echo=FALSE, results=FALSE}
+# randomly split the data into 80% training and 20% testing datasets
+set.seed(2)
+train_index <- sample(1:nrow(loan), size = round(0.8*nrow(loan)), replace = FALSE)
+loan_train <- loan[train_index, ]
+loan_test <- loan[-train_index, ]
+```
+## Modeling -- risk factors
+
+Since we have target value 0 and 1, we will use direct Logistic Regression to fit our data and find out the important risk factors.
+
+Based on some basic filtering, we have the following logistic regression to test factor importance. From the omitted results, we can conclude that int_rate, (term)60_months, annual_inc, inq_last_6mths, revol_bal, revol_util, and some purposes including medical, moving, small_business are significantly important at level 0.001. Some other important factors contains loan_amnt, installment, open_acc, pub_rec, home_ownership, and some purposes including debt_consolidation, educational, home_improvement, house, renewable_energy. Detailed results are in the appendix.
+
+```{r echo=TRUE, results=FALSE, warning=FALSE}
+
+fit1 <- glm(loan_status~loan_amnt+int_rate+installment+factor(term)+factor(grade) 
+            +factor(purpose)+annual_inc+factor(home_ownership)+factor(emp_length)
+            +factor(verification_status)+dti+delinq_2yrs+inq_last_6mths+open_acc
+            +pub_rec+revol_bal+revol_util+total_acc+pub_rec_bankruptcies
+             , loan_train, family=binomial(logit)) 
+summary(fit1, results=TRUE)
+```
+
+
+We can also get the p-value of individual model terms below. Combined with previous modeling result, we can conclude some risk factors making the loan to be defaulted, including loan_amnt, int_rate, installment, factor(term), factor(grade), factor(purpose), annual_inc, dti, delinq_2yrs, inq_last_6mths, pub_rec, revol_bal, revol_util.
+
+```{r echo=FALSE, results=TRUE, warning=FALSE}
+anova(fit1,test="Chisq")
+```
+
+### final model
+
+Based on important factors, we remove some variables including verification_status, emp_length, dti, total_acc, pub_rec_bankruptcies, and open_acc. After running several Logistic Regression on selected factors, we select the following model as our final model. 
+
+```{r results=FALSE, echo=TRUE}
+fit2 <- glm(loan_status~loan_amnt+int_rate+installment+factor(term)+factor(grade)
+            +factor(purpose)+annual_inc+factor(home_ownership)+
+            +dti+inq_last_6mths+pub_rec+revol_bal+revol_util
+             ,loan_train, family=binomial(logit)) 
+```
+
+Among various purposes, borrower with the goal of small business are more likely to have a defaulted loan. 60-month term more likely results in a defaulted loan than 36-month term. Higher interest rate will lead to higher default rate.
+
+Running the anova test below, we can reject the null hypothesis at 0.001 level.
+
+```{r echo=FALSE, results=FALSE}
+anova(fit1,fit2,test="Chisq")
+```
+
+## Modeling -- classifier
+
+After training the Logistic Regression with the training dataset, we will now test on the rest testing dataset. From the ratio of picking up a bad loan to that of missing a good loan, which is 2:1, we have P_hat(Y = 1|x) = 0.5/(1+0.5) = 0.333. Thus, we predict loans with percentage larger than 0.333 as bad loans and vice versa.
+
+```{r echo=FALSE}
+fit2.predict.percent <- predict(fit2, loan_test, type="response")
+fit2.predict.binary <- ifelse(fit2.predict.percent > 0.333, 1, 0)
+```
+
+
+```{r echo=FALSE,results=FALSE}
+output1 <- data.frame(loan_test$loan_status, fit2.predict.binary, fit2.predict.percent)[sample(1406, 10),]
+names(output1) <- c( "loan_status", "Predicted loan_status", "Prob")
+output1
+```
+
+The confusion matrix below provides insight into the performance of the model. This means that the model predicted 6553 good loans correctly (TP), and 115 bad loans correctly (TN). However, it also predicted 934 bad loans as good loans (FP) and 192 good loans as bad loans (FN).
+
+```{r results=FALSE, echo=FALSE}
+cm1 <- table(fit2.predict.binary, loan_test$loan_status) # contingency table cm.5 # notice that the top labels are the data
+cm1
+```
+
+Based on the given testing result, the sensitivity of the model is 0.117, which means that only 11.7% of the true positive cases were correctly identified by the model. The specificity of the model is 0.97, which means that the model correctly identified 97% of the true negative cases. The false positive rate of the model is 0.0295, which means that 2.95% of the cases that were actually negative were incorrectly identified as positive by the model. The accuracy of the model is 0.8283, which means that the model correctly identified 82.83% of the cases.
+
+Overall, these metrics suggest that the model has a high specificity and a low false positive rate, which means that it is good at identifying true negative cases. However, the model has a low sensitivity, which means that it is not very good at identifying true positive cases. 
+
+```{r echo=FALSE, results=FALSE}
+sensitivity <- cm1[2,2]/sum(cm1[,2])
+sensitivity
+specificity <- cm1[1,1]/sum(cm1[,1])
+specificity
+false.positive <- cm1[2,1]/sum(cm1[,1])
+false.positive
+```
+
+Below is the ROC curve visualizing the performance of a classifier system across a range of thresholds. The Area Under the Curve (AUC) of the ROC curve is 0.702, suggesting that the classifier system is somewhat effective at distinguishing between positive and negative cases, but there is still room for improvement.
+
+```{r echo=FALSE, results=TRUE}
+# install.packages("pROC")
+library(pROC)
+fit2.roc<- roc(loan_test$loan_status, fit2.predict.percent, plot=T, col="blue")
+```
+
+We can also plot a curve that shows the probability thresholds used and the corresponding False Positive rate. With a higher threshold, false positive decreases sharply.
+
+```{r echo=FALSE, results=FALSE}
+plot(fit2.roc$thresholds, 1-fit2.roc$specificities,  col="green", pch=16,
+     xlab="Threshold on prob",
+     ylab="False Positive",
+     main = "Thresholds vs. False Postive")
+```
+
+```{r echo=FALSE, results=FALSE}
+fit2.roc$auc
+pROC::auc(fit2.roc)
+```
+
+```{r echo=FALSE, results=FALSE, warning=FALSE}
+error.training <- mean(loan_train$loan_status != fit2.predict.binary)
+error.training
+```
+
+```{r echo=FALSE, results=FALSE}
+accuracy <- 1 - error.training
+accuracy
+```
+
+
+# Success of Lending Club
+
+Lending Club's success can be attributed to several factors, including its ability to connect borrowers directly with individual investors, its use of technology to streamline the loan application and approval process, and its focus on providing competitive interest rates to borrowers while generating attractive returns for investors.
+
+One key advantage of Lending Club's business model is that it removes the middleman in the lending process, thereby reducing the costs associated with traditional lending institutions. This allows Lending Club to offer borrowers lower interest rates and fees, which in turn attracts a large pool of potential borrowers. Additionally, Lending Club's platform provides investors with access to a diversified portfolio of loans, which can help to minimize risk and generate steady returns.
+
+Another factor contributing to Lending Club's success is its use of technology to automate much of the loan application and approval process. By leveraging data analytics and machine learning algorithms, Lending Club is able to quickly and accurately assess borrowers' creditworthiness and determine the appropriate interest rates and loan terms. This not only speeds up the lending process, but also allows Lending Club to make more informed lending decisions and reduce the risk of default.
+
+Furthermore, Lending Club's focus on transparency and customer service has helped to build trust among its users. The company provides borrowers with clear information about the loan terms and fees, and investors with detailed data on the performance of their investments. This has helped to create a sense of community among Lending Club users, which in turn has helped to drive the company's growth.
+
+Overall, Lending Club's success can be attributed to its ability to leverage technology to reduce costs, automate processes, and improve decision-making, while also providing borrowers with competitive rates and investors with attractive returns.
+
+# Improvement
+
+Based on the analyses done so far, there are several recommendations that Lending Club could consider in order to modify their selection rules and increase returns for investors:
+
+Implement more robust credit scoring models: While Lending Club currently uses FICO scores to evaluate creditworthiness, they could explore more advanced credit scoring models that incorporate additional variables such as income, employment history, and debt-to-income ratio. This could help to more accurately predict default risk and improve overall loan performance.
+
+Improve borrower verification processes: Lending Club could enhance their verification processes for borrower information to reduce the risk of fraud and default. This could include verifying employment and income information, as well as conducting more rigorous identity verification checks.
+
+Expand loan product offerings: Lending Club could explore offering a wider range of loan products, such as secured loans or loans with longer terms, to attract a broader range of borrowers and increase the overall pool of available investments for investors.
+
+Increase transparency and communication with investors: Lending Club could improve transparency around their loan selection process and provide more frequent updates to investors regarding the performance of their loans. This could help to build trust with investors and encourage them to continue investing with Lending Club.
+
+Implement more sophisticated risk management strategies: Lending Club could explore more advanced risk management strategies, such as diversifying their loan portfolios across a broader range of risk profiles or implementing hedging strategies to manage risk. This could help to reduce overall risk and increase returns for investors.
+
+```{r echo=FALSE}
+cat("\f")
+```
+
+# Appendix
+
+Below are the distribution of data:
+
+```{r results=TRUE, echo=FALSE}
+library(ggplot2)
+
+ggplot(data = loan, aes(x = grade)) +
+  geom_bar(fill = "lightblue", color = "black") +
+  xlab("Grade") + ylab("Count") +
+  ggtitle("Frequency of Loan Grades") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r results=TRUE, echo=FALSE}
+library(ggplot2)
+ggplot(loan, aes(x=installment)) + geom_histogram(bins=6, fill="lightblue", color="black") +
+  xlab("loan_amnt") + ylab("Frequency") + ggtitle("Histogram of loan amount")  +
+theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r results=TRUE, echo=FALSE}
+library(ggplot2)
+
+ggplot(data = loan, aes(x = reorder(purpose, -table(purpose)[purpose]))) +
+  geom_bar(fill = "lightblue", color = "black") +
+  xlab("Purpose") + ylab("Count") +
+  ggtitle("Frequency of Loan Purposes") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r results=TRUE, echo=FALSE}
+# modify order?
+library(ggplot2)
+
+ggplot(data = loan, aes(x = emp_length)) +
+  geom_bar(fill = "lightblue", color = "black") +
+  xlab("Purpose") + ylab("Count") +
+  ggtitle("Frequency of Loan Purposes") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Below is the result of first Logistic Regression without filtering variables.
+
+```{r echo=TRUE, results=TRUE, warning=FALSE}
+
+fit1 <- glm(loan_status~loan_amnt+int_rate+installment+factor(term) +factor(grade) + factor(purpose)
+            + annual_inc+ factor(home_ownership)+factor(verification_status)+factor(emp_length)+
+             dti+delinq_2yrs+inq_last_6mths+open_acc+pub_rec+revol_bal+revol_util+total_acc+pub_rec_bankruptcies
+             , loan_train, family=binomial(logit)) 
+summary(fit1, results=TRUE)
+```
+
+Final model:
+```{r results=TRUE, echo=TRUE}
+fit2 <- glm(loan_status~loan_amnt+int_rate+installment+factor(term)+factor(grade)
+            +factor(purpose)+annual_inc+factor(home_ownership)+
+            +dti+inq_last_6mths+pub_rec+revol_bal+revol_util
+             ,loan_train, family=binomial(logit)) 
+summary(fit2, results=TRUE)
+```
+
+Anova test:
+```{r echo=TRUE, results=TRUE}
+anova(fit1,fit2,test="Chisq")
+```
