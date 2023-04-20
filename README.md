@@ -13,3 +13,4 @@ Projects covering:
 8. Text Mining
 9. Deep Learning
 10. Trees RF
+11. XGBoost
